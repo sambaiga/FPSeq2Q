@@ -8,8 +8,12 @@ import math
 import palettable
 colors = [plt.cm.Blues(0.6), plt.cm.Reds(0.4), '#99ccff', '#ffcc99', plt.cm.Greys(0.6), plt.cm.Oranges(0.8), plt.cm.Greens(0.6), plt.cm.Purples(0.8)]
 SPINE_COLOR="gray"
-
-
+from net.metrics import *
+from IPython.display import set_matplotlib_formats
+set_matplotlib_formats('retina')
+import arviz as az
+az.style.use(["science", "grid"])
+import pandas as pd
 
 def set_figure_size(fig_width=None, fig_height=None, columns=2):
     assert(columns in [1,2])
@@ -90,4 +94,122 @@ def get_label_distribution(ax, y, title=None, max_value=1):
     for p in ax.patches:
         #ax.annotate('{:.0%}'.format(height), (p.get_x()+.15*width, p.get_y() + height + 0.01))
         ax.annotate("{}$\%$".format(p.get_height()), (p.get_x() + p.get_width() / 2., p.get_height()), ha='center', va='center', xytext=(0, 10), textcoords='offset points')
+    return ax
+
+def plot_xy(ax, mu, true, q_pred, min_lim, max_lim):
+    x  = np.arange(len(true))
+    
+    h1 = ax.plot(x, true, ".", mec="#ff7f0e", mfc="None")
+    h2 = ax.plot(x, mu,   '.-',  c="#1f77b4", alpha=0.8)
+    
+    ax.set_ylabel('Power $(KW)$')
+    
+    N = q_pred.shape[0]
+    alpha = np.linspace(0.1, 0.9, N//2).tolist() + np.linspace(0.9, 0.2, 1+N//2).tolist()
+    
+    
+    for i in range(N):
+        y1 = q_pred[i, :]
+        y2 = q_pred[-1-i, :]
+        h3 = ax.fill_between(x, y1.flatten(), y2.flatten(), color="lightsteelblue", alpha=alpha[1])
+    ax.autoscale(tight=True)
+    ax.set_ylabel('Power $(KW)$')
+    ax.autoscale(tight=True)
+    ax.set_ylim(min_lim, max_lim)
+    lines =[h1[0], h2[0], h3]
+    label = ["True", "Pred mean", "$95\%$ Interval"]
+    return ax, lines, label
+
+
+def plot_intervals_ordered(ax, mu, std, true):
+    
+    
+    order = np.argsort(true.flatten())
+    mu, true, std = mu[order], true[order], std[order]
+    xs = np.arange(len(order))
+    
+    _ = ax.errorbar(
+        xs,
+        mu,
+        std,
+        fmt="o",
+        ls="none",
+        linewidth=1.5,
+        c="#1f77b4",
+        alpha=0.5)
+    h1 = ax.plot(xs, mu, "o", c="#1f77b4")
+    h2 = ax.plot(xs, true, ".", linewidth=2.0, c="#ff7f0e")
+    ax.legend([h1[0], h2[0]], ["Predicted Values", "Observed Values"], loc=4)
+    
+    intervals_lower_upper = [mu-std, mu+std]
+    lims_ext = [
+            int(np.floor(np.min(intervals_lower_upper[0]))),
+            int(np.ceil(np.max(intervals_lower_upper[1]))),
+        ]
+    _ = ax.set_ylim(lims_ext)
+    _ = ax.set_xlabel("Index (Ordered by Observed Value)")
+    _ = ax.set_ylabel("Predicted Values and Intervals")
+    _ = ax.set_aspect("auto", "box")
+    return ax
+
+
+        
+def plot_calibration(ax, mu, std, true):
+    (exp_proportions, obs_proportions) = get_proportion_lists_vectorized(mu, std, true)
+
+    curve_label="Predictor"
+    ax.plot([0, 1], [0, 1], "--", label="Ideal", c="#ff7f0e")
+    ax.plot(exp_proportions, obs_proportions, label=curve_label, c="#1f77b4")
+    ax.fill_between(exp_proportions, exp_proportions, obs_proportions, alpha=0.2)
+    ax.set_xlabel("Predicted proportion in interval")
+    ax.set_ylabel("Observed proportion in interval")
+    ax.axis("square")
+    buff = 0.01
+    ax.set_xlim([0 - buff, 1 + buff])
+    ax.set_ylim([0 - buff, 1 + buff])
+
+    # Compute miscalibration area
+    polygon_points = []
+    for point in zip(exp_proportions, obs_proportions):
+        polygon_points.append(point)
+    for point in zip(reversed(exp_proportions), reversed(exp_proportions)):
+        polygon_points.append(point)
+        polygon_points.append((exp_proportions[0], obs_proportions[0]))
+        polygon = Polygon(polygon_points)
+
+    x, y = polygon.exterior.xy  # original data
+    ls = LineString(np.c_[x, y])  # closed, non-simple
+    lr = LineString(ls.coords[:] + ls.coords[0:1])
+    mls = unary_union(lr)
+    polygon_area_list = [poly.area for poly in polygonize(mls)]
+    miscalibration_area = np.asarray(polygon_area_list).sum()
+
+    # Annotate plot with the miscalibration area
+    ax.text(
+            x=0.95,
+            y=0.05,
+            s="Miscalibration area = %.2f" % miscalibration_area,
+            verticalalignment="bottom",
+            horizontalalignment="right",
+            fontsize=12)
+    return ax
+
+
+
+
+def plot_boxplot_per_encoder(ax, dict_results, metric, label):
+    
+    df = pd.DataFrame()
+    
+    encoders = list(dict_results.keys())
+    for enc in encoders:
+        if enc=="SVR":
+            continue
+        df[enc]=dict_results[enc][metric]
+    
+    ax.boxplot(df, showmeans=True, manage_ticks=True, autorange=True)
+    plt.xticks(range(1, len(encoders )+1), encoders , rotation=0, fontsize=12);
+    ax.set_ylabel(label)
+    ax.autoscale(tight=True)
+    
     return ax

@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import math
+import math
+from typing import Dict, List, Tuple, Union
 
 def nonlinearity(x):
     # swish
@@ -19,9 +21,11 @@ class Swish(nn.Module):
     def forward(self, x):
         return torch.mul(x.sigmoid(), x)
 
-def create_linear(in_channels, out_channels, bn=True):
+def create_linear(in_channels, out_channels, bn=False):
     m = nn.Linear(in_channels,out_channels)
-    nn.init.xavier_normal_(m.weight.data)
+    #nn.init.xavier_normal_(m.weight.data)
+    nn.init.kaiming_uniform_(m.weight)
+        
     if m.bias is not None:
         torch.nn.init.constant_(m.bias, 0)
     if bn:
@@ -48,7 +52,7 @@ class GLU(nn.Module):
 
 def create_conv1(in_channels, out_channels, 
                  kernel_size=3, bias=True, 
-                 stride=1, padding=0, bn=True):
+                 stride=1, padding=0, bn=False):
 
     
     m = nn.Conv1d(in_channels,out_channels, 
@@ -56,7 +60,7 @@ def create_conv1(in_channels, out_channels,
                   bias=bias, 
                   stride=stride, padding=padding)
 
-    nn.init.xavier_normal_(m.weight.data)
+    nn.init.kaiming_uniform_(m.weight)
     if m.bias is not None:
         torch.nn.init.constant_(m.bias, 0)
 
@@ -68,7 +72,7 @@ def create_conv1(in_channels, out_channels,
 
 def create_deconv1(in_channels, out_channels,
                    kernel_size=3, bias=True,
-                   stride=1, padding=0, bn=True):
+                   stride=1, padding=0, bn=False):
 
     
     m = nn.ConvTranspose1d(in_channels,
@@ -77,7 +81,7 @@ def create_deconv1(in_channels, out_channels,
                            bias=bias, 
                            stride=stride, padding=padding)
     
-    nn.init.xavier_normal_(m.weight.data)
+    nn.init.kaiming_uniform_(m.weight)
     if m.bias is not None:
         torch.nn.init.constant_(m.bias, 0)
 
@@ -113,7 +117,7 @@ class Downsample(nn.Module):
             # no asymmetric padding in torch conv, must do it ourselves
             self.conv = create_conv1(in_channels, out_channels, 
                  kernel_size=kernel_size, bias=True, 
-                 stride=stride, padding=padding, bn=True)
+                 stride=stride, padding=padding, bn=False)
 
     def forward(self, x):
         if self.with_conv:
@@ -206,5 +210,64 @@ class Up(nn.Module):
         x = self.conv(x)
         return x  
 
+
+
+class TimeDEmbedding(nn.Module):
+    def __init__(self,  in_size, out_size):
+        super().__init__()
+        self.fc = create_linear(in_size, out_size)
+
+    def forward(self, x):
+        if len(x.size()) <= 2:
+            return x
+        else:
+            # Squash samples and timesteps into a single axis
+            x_reshape = x.contiguous().view(-1, x.size(-1))  # (samples * timesteps, input_size)
+            y = self.fc(x_reshape)
+
+            # We have to reshape Y
+            y = y.contiguous().view(x.size(0), -1, y.size(-1))  # (samples, timesteps, output_size)
+            return y
+
+
+
+
+class CateEmb(nn.Module):
+    def __init__(self, emb_dims, droput):
+        super().__init__()
+        
+        emb_dims = [(x, min(50, round(1.6 * x**0.56))) for x in emb_dims]
+        self.embeds = nn.ModuleList([nn.Embedding(x, y) for x,y in emb_dims])
+        self.emb_drop = nn.Dropout(droput)
+        
+
+        n_emb = sum([y for x, y in emb_dims])
+        self.n_emb = n_emb
+        self.emb_dropout_layer = nn.Dropout(droput)
+        self.emb_dims=emb_dims
+        
+    def forward(self, x):
+        x = [e(x[:,i]) for i,e in enumerate(self.embeds)]
+        x = torch.cat(x, 1)
+        x = self.emb_drop(x)
+        return x
+
+
+class TimeCategoricalEmbedding(nn.Module):
+    def __init__(self,  emb_dims, droput):
+        super().__init__()
+        self.emb = CateEmb(emb_dims, droput)
+
+    def forward(self, x):
+        if len(x.size()) <= 2:
+            return x
+        else:
+            # Squash samples and timesteps into a single axis
+            x_reshape = x.contiguous().view(-1, x.size(-1))  # (samples * timesteps, input_size)
+            y = self.emb(x_reshape)
+
+            # We have to reshape Y
+            y = y.contiguous().view(x.size(0), -1, y.size(-1))  # (samples, timesteps, output_size)
+            return y
 
 
