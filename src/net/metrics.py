@@ -1,261 +1,341 @@
-from sklearn import metrics
 import math
 import numpy as np
-from sklearn.metrics import f1_score, mean_absolute_error, mean_squared_error
-from collections import OrderedDict
+import torch
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+    median_absolute_error,
+    mean_absolute_percentage_error
+)
+from shapely.geometry import Polygon, LineString
+from shapely.ops import polygonize, unary_union
+from tqdm import tqdm
+from scipy import stats
 import pandas as pd
 
-def get_sharpness(q_pred, true):
-    #R represents the difference between the maximum and
-    #the minimum of the target value.
-    lower = q_pred[:,0, : ]
-    upper = q_pred[:,-1, :]
-    N = true.shape[0]
-    R = true.max() - true.min()
-    diff = (upper - lower).sum()
-    sharpness = diff/(R*N)
-    return sharpness
+
+def sharpness(y_std):
+    """
+    Return sharpness (a single measure of the overall confidence).
+    """
+
+    # Compute sharpness
+    sharp_metric = np.sqrt(np.mean(y_std ** 2))
+
+    return sharp_metric
 
 
-def eval_quantiles(q_pred, true, pred):
-    N = true.shape[0]
-    lower = q_pred[:,0, : ]
-    upper = q_pred[:,-1, :]
-    icp = (1.0*((true>lower) & (true<upper))).sum()/N
+def root_mean_squared_calibration_error(
+    y_pred, y_std, y_true, num_bins=100, vectorized=False, recal_model=None
+):
+    """Return root mean squared calibration error."""
+
+    # Get lists of expected and observed proportions for a range of quantiles
+    if vectorized:
+        (exp_proportions, obs_proportions) = get_proportion_lists_vectorized(
+            y_pred, y_std, y_true, num_bins, recal_model
+        )
+    else:
+        (exp_proportions, obs_proportions) = get_proportion_lists(
+            y_pred, y_std, y_true, num_bins, recal_model
+        )
+
+    squared_diff_proportions = np.square(exp_proportions - obs_proportions)
+    rmsce = np.sqrt(np.mean(squared_diff_proportions))
+
+    return rmsce
+
+
+def mean_absolute_calibration_error(
+    y_pred, y_std, y_true, num_bins=100, vectorized=False, recal_model=None
+):
+    """ Return mean absolute calibration error; identical to ECE. """
+
+    # Get lists of expected and observed proportions for a range of quantiles
+    if vectorized:
+        (exp_proportions, obs_proportions) = get_proportion_lists_vectorized(
+            y_pred, y_std, y_true, num_bins, recal_model
+        )
+    else:
+        (exp_proportions, obs_proportions) = get_proportion_lists(
+            y_pred, y_std, y_true, num_bins, recal_model
+        )
+
+    abs_diff_proportions = np.abs(exp_proportions - obs_proportions)
+    mace = np.mean(abs_diff_proportions)
+
+    return mace
+
+
+#https://github.com/uncertainty-toolbox/uncertainty-toolbox/blob/master/uncertainty_toolbox/metrics_accuracy.py
+def prediction_error_metrics(y_pred, y_true):
+    """
+    Return prediction error metrics as a dict with keys:
+    - Mean average error ('mae')
+    - Root mean squared error ('rmse')
+    - Median absolute error ('mdae')
+    - Mean absolute relative percent difference ('marpd')
+    - r^2 ('r2')
+    - Pearson's correlation coefficient ('corr')
+    """
+
+    # Compute metrics
+    mae = mean_absolute_error(y_true, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+    mdae = median_absolute_error(y_true, y_pred)
+    residuals = y_true - y_pred
+    marpd = np.abs(2 * residuals / (np.abs(y_pred) + np.abs(y_true))).mean() * 100
+    r2 = r2_score(y_true, y_pred)
+    corr = np.corrcoef(y_true, y_pred)[0, 1]
+    prediction_metrics = {
+        "mae": mae,
+        "rmse": rmse,
+        "mdae": mdae,
+        "marpd": marpd,
+        "r2": r2,
+        "corr": corr,
+    }
+
+    return prediction_metrics
+
+
+def miscalibration_area(
+    y_pred, y_std, y_true, num_bins=100, vectorized=False, recal_model=None
+):
+    """
+    Return miscalibration area.
+    This is identical to mean absolute calibration error and ECE, however
+    the integration here is taken by tracing the area between curves.
+    In the limit of num_bins, miscalibration area and
+    mean absolute calibration error will converge to the same value.
+    """
+
+    # Get lists of expected and observed proportions for a range of quantiles
+    if vectorized:
+        (exp_proportions, obs_proportions) = get_proportion_lists_vectorized(
+            y_pred, y_std, y_true, num_bins, recal_model
+        )
+    else:
+        (exp_proportions, obs_proportions) = get_proportion_lists(
+            y_pred, y_std, y_true, num_bins, recal_model
+        )
+
+    # Compute approximation to area between curves
+    polygon_points = []
+    for point in zip(exp_proportions, obs_proportions):
+        polygon_points.append(point)
+    for point in zip(reversed(exp_proportions), reversed(exp_proportions)):
+        polygon_points.append(point)
+    polygon_points.append((exp_proportions[0], obs_proportions[0]))
+    polygon = Polygon(polygon_points)
+    x, y = polygon.exterior.xy
+    ls = LineString(np.c_[x, y])
+    lr = LineString(ls.coords[:] + ls.coords[0:1])
+    mls = unary_union(lr)
+    polygon_area_list = [poly.area for poly in polygonize(mls)]
+    miscalibration_area = np.asarray(polygon_area_list).sum()
+
+    return miscalibration_area
+
+
+def get_proportion_lists_vectorized(
+    y_pred, y_std, y_true, num_bins=100, recal_model=None
+):
+    """
+    Return lists of expected and observed proportions of points falling into
+    intervals corresponding to a range of quantiles.
+    """
+
+    # Compute proportions
+    exp_proportions = np.linspace(0, 1, num_bins)
+    # If we are recalibrating, input proportions are recalibrated proportions
+    if recal_model is not None:
+        in_exp_proportions = recal_model.predict(exp_proportions)
+    else:
+        in_exp_proportions = exp_proportions
+
+    norm = stats.norm(loc=0, scale=1)
+    gaussian_lower_bound = norm.ppf(0.5 - in_exp_proportions / 2.0)
+    gaussian_upper_bound = norm.ppf(0.5 + in_exp_proportions / 2.0)
+    residuals = y_pred - y_true
+    normalized_residuals = (residuals.flatten() / y_std.flatten()).reshape(-1, 1)
+    above_lower = normalized_residuals >= gaussian_lower_bound
+    below_upper = normalized_residuals <= gaussian_upper_bound
+
+    within_quantile = above_lower * below_upper
+    obs_proportions = np.sum(within_quantile, axis=0).flatten() / len(residuals)
+
+    return exp_proportions, obs_proportions
+
+
+def get_proportion_lists(y_pred, y_std, y_true, num_bins=100, recal_model=None):
+    """
+    Return lists of expected and observed proportions of points falling into
+    intervals corresponding to a range of quantiles.
+    """
+
+    # Compute proportions
+    exp_proportions = np.linspace(0, 1, num_bins)
+    # If we are recalibrating, input proportions are recalibrated proportions
+    if recal_model is not None:
+        in_exp_proportions = recal_model.predict(exp_proportions)
+    else:
+        in_exp_proportions = exp_proportions
+
+    obs_proportions = [
+        get_proportion_in_interval(y_pred, y_std, y_true, quantile)
+        for quantile in in_exp_proportions
+    ]
+
+    return exp_proportions, obs_proportions
+
+
+def get_proportion_in_interval(y_pred, y_std, y_true, quantile):
+    """
+    For a specified quantile, return the proportion of points falling into
+    an interval corresponding to that quantile.
+    """
+
+    # Computer lower and upper bound for quantile
+    norm = stats.norm(loc=0, scale=1)
+    lower_bound = norm.ppf(0.5 - quantile / 2)
+    upper_bound = norm.ppf(0.5 + quantile / 2)
+
+    # Compute proportion of normalized residuals within lower to upper bound
+    residuals = y_pred - y_true
+    normalized_residuals = residuals.reshape(-1) / y_std.reshape(-1)
+    num_within_quantile = 0
+    for resid in normalized_residuals:
+        if lower_bound <= resid <= upper_bound:
+            num_within_quantile += 1.0
+    proportion = num_within_quantile / len(residuals)
+
+    return proportion
+
+
+
+
+
+
+def combined_CIPWRMSEscore(nmpi, pic, nrmse=0.063,  true_nmpic=0.392):
+    nmpic_diff = np.abs(true_nmpic-nmpi)
+    pic_diff   = 1-pic
+    pic_score=(np.exp(-nrmse*pic_diff))*pic
+    nmpic_score = np.exp(-nrmse*nmpic_diff)/(1+np.abs(nmpic_diff))
+    score = 2*nmpic_score*pic_score/(pic_score + nmpic_score)
+    return score*pic
+
+
+def get_prediction_interval_scores(mu, true, q_pred, R=None):
+    
+    lower, upper = q_pred[0], q_pred[-1]
+    pic = np.intersect1d(np.where(true > lower)[0], np.where(true < upper)[0])
+    pic = len(pic)/len(true)
     
     diffs = np.maximum(0, upper-lower)
-    mil = np.sum(diffs) / N
-    rmil = 0.0
-    for i in range(N):
-        if true[i] != pred[i]:
-            rmil += diffs[i] / (np.abs(true[i]-pred[i]))
-    rmil = rmil / N
-    clc = np.exp(-rmil*(icp-0.95))
-    sharpness = get_sharpness(q_pred, true)
-    return icp, mil, rmil, clc, sharpness
+    
+    if R is None:
+        R = true.max() - true.min()
+    nmpic = diffs.sum()/(R*len(true))
 
-def get_mae(target, prediction):
-    return mean_absolute_error(target, prediction)
-
-def get_nde(target, prediction):
-    num = (target - prediction) ** 2
-    denom = target ** 2
-    score = np.divide(num, denom, out=np.zeros_like(num), where=denom!=0).mean()
-    return  score
-
-def get_sae(target, prediction):
-    r = np.sum(target)
-    rhat = np.sum(prediction)
-    num = np.abs(r - rhat)
-    denom = np.abs(r)
-    sae = np.divide(num, denom, out=np.zeros_like(num), where=denom!=0).mean()
-    return sae
-
-def percentage_predicted_deviation(target, prediction):
-    num = np.abs(prediction.sum() - target.sum()) 
-    denom = target.sum()
-    score = np.divide(num, denom, out=np.zeros_like(num), where=denom!=0).mean()
-    return score
-
-def smape_score(target, prediction):
-    denom = (np.abs(prediction) + np.abs(target)).mean()
-    num    =  np.abs(prediction - target).mean()
-    score = 2*np.divide(num, denom, out=np.zeros_like(num), where=denom!=0).mean()
-    return score
-
-def nrms_score(target, prediction):
-    num = np.sqrt((prediction - target)**2)
-    denom = np.abs(target)
-    score = np.divide(num, denom, out=np.zeros_like(num), where=denom!=0).mean()
-    return score 
-
-def get_eac(target, prediction):
-    #
-    num=np.abs(target - prediction)
-    eac = 1 - np.divide(num, target, out=np.zeros_like(num), where=target!=0).mean()/2
-    return eac
-
-def get_relative_mae(target, prediction):
-    assert prediction.shape == target.shape
-    num   = np.abs(target - prediction)
-    denom = np.max((target, prediction), axis=0)
-    relative_mae  = np.divide(num, denom, out=np.zeros_like(num), where=denom!=0).mean()
-    return relative_mae
+    return pic, nmpic
 
 
 
-def subset_accuracy(true_targets, predictions, per_sample=False, axis=1):
-    result = np.all(true_targets == predictions, axis=axis)
-    if not per_sample:
-        result = np.mean(result)
+def cwi_score(y, quantile_hats, eps=1e-6):
+    lower, upper = quantile_hats[:,0, :], quantile_hats[:,-1,:]
+    pic = np.intersect1d(np.where(y.data.cpu().numpy().flatten() > lower.data.cpu().numpy().flatten())[0], np.where(y.data.cpu().numpy().flatten() < upper.data.cpu().numpy().flatten())[0])
+    pic = torch.tensor(len(pic)/len(y.flatten())).to(y.device)
+    mpic =  (upper-lower).abs().mean()
+    
+    y_q    = y.unsqueeze(1).expand_as(quantile_hats)
+    nrmse_q = torch.sqrt((y_q - quantile_hats)**2).sum(axis=1).mean()
+    nrmse = torch.nn.functional.mse_loss(quantile_hats, y_q, reduction='none').sum(1).mean()
 
-    return result
+    true_mpic = 2*y.std()
+    mpic_diff = (true_mpic-mpic).abs()
+    pic_diff   = 1-pic
+            
+    pic_score=(torch.exp(-nrmse*pic_diff))*pic
+    mpic_score = torch.exp(-nrmse*mpic_diff)/(1+ mpic_diff)
+    
+    score = torch.div(2*mpic_score*pic_score, (pic_score + mpic_score)+eps)
+    #score = torch.nan_to_num(score)
+    
+    return 1-score
 
-def compute_jaccard_score(true_targets, predictions, per_sample=False, average='macro'):
-    if per_sample:
-        jaccard = metrics.jaccard_score(true_targets, predictions, average=None)
+
+
+def get_metrics_dataframe(true, mu, q_pred=None, tau_hat=None, a_step=48, R=None, true_nmpic=None):
+
+    if R is None:
+        R = true.max() - true.min() 
+
+    
+    nrmse = []
+    pic = []
+    nmpi = []
+    mape = []
+    ciwrmse = []
+    
+    true_nmpic = []
+    UCE = []
+    epistemitic = []
+    aelotic = []
+    uncert = []
+    error = []
+    
+    maap = []
+    mae = []
+    mdae = []
+    
+    r2 = []
+    corr = []
+    marpd = []
+    for day in range(0, true.shape[0], a_step):
+        temp_nrmse=np.sqrt(mean_squared_error(true[day], mu[day]))/R
+        nrmse.append(temp_nrmse)
+        NRMSE=np.sqrt(mean_squared_error(true[day], mu[day]))/R  
+        temp_mape = mean_absolute_percentage_error(true[day], mu[day])
+        if q_pred is not None:
+            temp_pic, temp_nmpic = get_prediction_interval_scores(mu[day], true[day], q_pred[day], R=R)
+            pic.append(temp_pic)
+            nmpi.append(temp_nmpic)
+            nrmse_q = np.sqrt((true[day]-q_pred[day])**2).sum(axis=1).mean()/R
+            temp_ciw = combined_CIPWRMSEscore(temp_nmpic, temp_pic, nrmse=nrmse_q,  true_nmpic=2*true[day].std()/R)
+            ciwrmse.append(temp_ciw)
+
+            #unc, ael, ep = get_uncertainity(torch.tensor(mu[day]), torch.tensor(q_pred[day]), torch.tensor(tau_hat[day]), dim=0)
+            #err = torch.nn.functional.mse_loss(torch.tensor(q_pred[day]), torch.tensor(true[day]).unsqueeze(0).expand_as(torch.tensor(q_pred[day])), reduction='none').mean(dim=0)
+            #uce, err_in_bin, avg_uncert_in_bin, prop_in_bin=uceloss(err, unc, n_bins=a_step, outlier=0.0, range=None)
+            #uncert.append(unc.mean().item())
+            #aelotic.append(ael.mean().item())
+            #epistemitic.append(ep.mean().item())
+            #UCE.append(uce.item())
+            #error.append(err.mean().item())
+            true_nmpic.append(2*true[day].std()/R)
+
+        
+        mape.append(min(temp_mape, 1))
+        
+
+        pred=prediction_error_metrics(mu[day], true[day])
+        maap.append(min(np.arctan(np.abs((true[day]-mu[day])/true[day])).mean(), 1))
+        mae.append(pred['mae'])
+        mdae.append(pred['mdae'])
+
+        corr.append(pred['corr'])
+        r2.append(pred['r2'])
+        marpd.append(pred['marpd'])
+        
+    if q_pred is None:
+        metrics=dict(nrmse=nrmse,   mape=mape,  corr=corr, r2=r2, marpd=marpd, mdae=mdae, 
+                     mae=mae, maap=maap)
     else:
-        if average not in set(['samples', 'macro', 'weighted']):
-            raise ValueError("Specify samples or macro")
-        jaccard = metrics.jaccard_score(true_targets, predictions, average=average)
-    return jaccard
-
-def hamming_loss(true_targets, predictions, per_sample=False, axis=1):
-
-    result = np.mean(np.logical_xor(true_targets, predictions),
-                        axis=axis)
-
-    if not per_sample:
-        result = np.mean(result)
-
-    return result
-
-
-def compute_tp_fp_fn(true_targets, predictions, axis=1):
-    # axis: axis for instance
-    tp = np.sum(true_targets * predictions, axis=axis).astype('float32')
-    fp = np.sum(np.logical_not(true_targets) * predictions,
-                   axis=axis).astype('float32')
-    fn = np.sum(true_targets * np.logical_not(predictions),
-                   axis=axis).astype('float32')
-
-    return (tp, fp, fn)
-
-
-def example_f1_score(true_targets, predictions, per_sample=False, axis=1):
-    tp, fp, fn = compute_tp_fp_fn(true_targets, predictions, axis=axis)
-
-    numerator = 2*tp
-    denominator = (np.sum(true_targets,axis=axis).astype('float32') + np.sum(predictions,axis=axis).astype('float32'))
-
-    zeros = np.where(denominator == 0)[0]
-
-    denominator = np.delete(denominator,zeros)
-    numerator = np.delete(numerator,zeros)
-
-    example_f1 = numerator/denominator
-
-
-    if per_sample:
-        f1 = example_f1
-    else:
-        f1 = np.mean(example_f1)
-
-    return f1
-
-def f1_score_from_stats(tp, fp, fn, average='micro'):
-    assert len(tp) == len(fp)
-    assert len(fp) == len(fn)
-
-    if average not in set(['micro', 'macro']):
-        raise ValueError("Specify micro or macro")
-
-    if average == 'micro':
-        f1 = 2*np.sum(tp) / \
-            float(2*np.sum(tp) + np.sum(fp) + np.sum(fn))
-
-    elif average == 'macro':
-
-        def safe_div(a, b):
-            """ ignore / 0, div0( [-1, 0, 1], 0 ) -> [0, 0, 0] """
-            with np.errstate(divide='ignore', invalid='ignore'):
-                c = np.true_divide(a, b)
-            return c[np.isfinite(c)]
-
-        f1 = np.mean(safe_div(2*tp, 2*tp + fp + fn))
-
-    return f1
-
-def f1_score(true_targets, predictions, average='macro', axis=0):
-    """
-        average: str
-            'micro' or 'macro'
-        axis: 0 or 1
-            label axis
-    """
-    if average not in set(['micro', 'macro']):
-        raise ValueError("Specify micro or macro")
-
-    tp, fp, fn = compute_tp_fp_fn(true_targets, predictions, axis=axis)
-    f1 = f1_score_from_stats(tp, fp, fn, average=average)
-
-    return f1
-
-
-
-def compute_metrics(y_t, y_p):
-    tp, fp, fn = compute_tp_fp_fn(y_t, y_p, axis=0)
-    mif1 = round(f1_score_from_stats(tp, fp, fn, average='micro'),4)
-    maf1 = round(f1_score_from_stats(tp, fp, fn, average='macro'),4)
-    hl_ = hamming_loss(y_t, y_p, axis=0, per_sample=True)
-    exf1_ = list(example_f1_score(y_t, y_p, axis=0, per_sample=True))
-    hl = round(np.mean(hl_), 4)
-    exf1 = round(np.mean(exf1_), 4)
-    
-    metrics_dict = {}
-    metrics_dict['appF1'] = exf1_ 
-    metrics_dict['HA'] = hl_
-    metrics_dict['ebF1'] = exf1
-    metrics_dict['miF1'] = mif1
-    metrics_dict['maF1'] = maf1
-    return metrics_dict
-
-
-def compute_regress_metrics(y_t, y_p):
-    eac = get_eac(y_t, y_p)
-    nde = get_nde(y_t, y_p)
-    mae = get_mae(y_t, y_p)
-    metrics_dict = {}
-    metrics_dict['EAC'] = eac
-    metrics_dict['NDE'] = nde
-    metrics_dict['MAE'] = mae
-    return metrics_dict
-
-def get_results_summary(z_t, z_p, y_t, y_p, appliances, data="UKDALE"):
-    
-    reg = compute_regress_metrics(y_t, y_p)
-    mlb = compute_metrics(z_t, z_p)
-    
-    per_app = {'EAC': reg['EAC'].tolist(),
-          'NDE': reg['NDE'].tolist(),
-          'MAE': reg['MAE'].tolist(),
-          'exbF1': mlb['appF1'],
-          'HA': (1-mlb['HA']).tolist()}
-    per_app =pd.DataFrame.from_dict(per_app, orient="index")
-    per_app.columns = appliances
-    avg_results = {'EAC': reg['EAC'].mean().tolist(),
-          'NDE': reg['NDE'].mean().tolist(),
-          'MAE': reg['MAE'].mean().tolist(),
-          'exbF1': mlb['ebF1'].tolist(),
-           'maF1': mlb['maF1'].tolist(),
-           'miF1': mlb['miF1'].tolist(),
-          'HA': (1-mlb['HA']).mean().tolist()}
-    avg_results =pd.DataFrame.from_dict(avg_results, orient="index")
-    avg_results.columns = [data]
-    return per_app, avg_results
-
-
-
-
-def compute_regress_metrics(target, prediction, d_round=4, app_name=None):
-    eac   = round(get_eac(target, prediction),d_round)
-    mae   = round(get_mae(target, prediction),d_round)
-    nde   = round(get_nde(target, prediction),d_round)
-    sae   = round(get_sae(target, prediction),d_round)
-    nrms  = round(nrms_score(target, prediction),d_round)
-    dep   = round(percentage_predicted_deviation(target, prediction),d_round)
-    rmae  = round(get_relative_mae(target, prediction), d_round)
-    smape = round(smape_score(target, prediction),d_round)
-    
-   
-    metrics_dict = {}
-    metrics_dict['EAC'] = eac
-    metrics_dict['MAE'] = mae
-    metrics_dict['NDE'] = nde
-    metrics_dict['DEP'] = dep
-    metrics_dict['SAE'] = sae
-    metrics_dict['SMAPE'] = smape
-    metrics_dict['RMAE'] = rmae
-    
-
-    return metrics_dict 
+        
+        metrics=dict(nrmse=nrmse,  pic=pic, 
+                     nmpi=nmpi, mape=mape, ciwrmse = ciwrmse, true_nmpic=true_nmpic, corr=corr, r2=r2, marpd=marpd, mdae=mdae, 
+                     mae=mae, maap=maap)
+    metrics=pd.DataFrame.from_dict(metrics)
+    return metrics

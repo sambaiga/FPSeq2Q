@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 #https://github.com/ku2482/fqf-iqn-qrdqn.pytorch
 
 def calculate_huber_loss(td_errors, kappa=1.0):
@@ -37,60 +38,49 @@ def calculate_quantile_huber_loss(td_errors, taus, weights=None, kappa=1.0):
 
 
 
-def smooth_pinball_loss(error, q, tau, alpha = 0.5, kappa = 1e3, margin = 1e-2):
-    #https://github.com/hatalis/smooth-pinball-neural-network/blob/master/pinball_loss.py
-    #Hatalis, Kostas, et al. "A Novel Smoothed Loss and Penalty Function 
-    #for Noncrossing Composite Quantile Estimation via Deep Neural Networks." arXiv preprint (2019).
-    tau_error = torch.mul(error, tau.unsqueeze(2).expand_as(error))
-    q_loss = (tau_error + alpha * torch.nn.functional.softplus(-error / alpha)).sum(1).mean()
-    # calculate smooth cross-over penalty
-    diff = q[:, 1:, :] - q[:,:-1,:]
-    penalty = kappa * torch.square(torch.nn.functional.relu(margin - diff)).mean()
-    loss = penalty+q_loss
-    return loss
 
+def cwi_score(y, quantile_hats, eps=1e-6):
+    with torch.no_grad():
+        lower, upper = quantile_hats[:,0, :], quantile_hats[:,-1,:]
+        pic = np.intersect1d(np.where(y.data.cpu().numpy().flatten() > lower.data.cpu().numpy().flatten())[0], np.where(y.data.cpu().numpy().flatten() < upper.data.cpu().numpy().flatten())[0])
+        pic = torch.tensor(len(pic)/len(y.flatten())).to(y.device)
+        mpic =  (upper-lower).abs().mean()
+        
+        y_q    = y.unsqueeze(1).expand_as(quantile_hats)
+        nrmse_q = torch.sqrt((y_q - quantile_hats)**2).sum(axis=1).mean()
+        nrmse = torch.nn.functional.mse_loss(quantile_hats, y_q, reduction='none').sum(1).mean()
 
-def quantile_multitaget_proposal_loss(quantile, quantile_hats, taus):
-    assert not taus.requires_grad
-    assert not quantile_hats.requires_grad
-    assert not quantile.requires_grad
-
-
-    value_1 = quantile - quantile_hats[:, :-1, :]
-    signs_1 = quantile > torch.cat([quantile_hats[:, :1,:], quantile[:, :-1,:]], dim=1)
-    value_2 = quantile - quantile_hats[:, 1:]
-    signs_2 = quantile < torch.cat([quantile[:, 1:], quantile_hats[:, -1:]], dim=1)
-    gradient_tau = (torch.where(signs_1, value_1, -value_1) + torch.where(signs_2, value_2, -value_2)).view(*value_1.size())
+        true_mpic = 2*y.std()
+        mpic_diff = (true_mpic-mpic).abs()
+        pic_diff   = 1-pic
+                
+        pic_score=(torch.exp(-nrmse*pic_diff))*pic
+        mpic_score = torch.exp(-nrmse*mpic_diff)/(1+ mpic_diff)
+        
+        score = torch.div(2*mpic_score*pic_score, (pic_score + mpic_score)+eps)
+    #score = torch.nan_to_num(score)
     
-    tau_loss = torch.mul(gradient_tau.detach(), taus[:, :, 1: -1].permute(0,2,1)).sum(1).mean()
-    return tau_loss
+    return 1-score
 
 
-def quantile_proposal_loss(quantile, quantile_hats, taus):
+
+
+
+def N_quantile_proposal_loss(quantile, quantile_hats, taus):
+    
     assert not taus.requires_grad
     assert not quantile_hats.requires_grad
     assert not quantile.requires_grad
-
 
     value_1 = quantile - quantile_hats[:, :-1]
     signs_1 = quantile > torch.cat([quantile_hats[:, :1,:], quantile[:, :-1,:]], dim=1)
     value_2 = quantile - quantile_hats[:, 1:]
     signs_2 = quantile < torch.cat([quantile[:, 1:], quantile_hats[:, -1:]], dim=1)
     gradient_tau = (torch.where(signs_1, value_1, -value_1) + torch.where(signs_2, value_2, -value_2)).view(*value_1.size())
-    tau_loss = torch.mul(gradient_tau.detach(), taus[:, 1: -1].unsqueeze(2).expand_as(gradient_tau)).sum(1).mean()
+    tau_loss = torch.mul(gradient_tau.detach(), taus[:, 1: -1, :]).sum(1).mean()
     return tau_loss
 
 
-def calibration_loss(y, quantile_hats, confidence = 0.9):
-    
-    y=y.unsqueeze(1).expand_as(quantile_hats)
-    idx_under = y <= quantile_hats
-    idx_over = ~idx_under
-    coverage = torch.mean(idx_under.float(), dim=0)
-    error = y - quantile_hats
-    mean_diff_under = torch.mean(-1 * error * idx_under, dim=0)
-    mean_diff_over = torch.mean(error * idx_over, dim=0)
-    cov_under = coverage < confidence
-    cov_over = ~cov_under
-    loss = (cov_under * mean_diff_over) + (cov_over * mean_diff_under)
-    return loss.mean()
+
+
+
