@@ -1,1 +1,1 @@
-# Seq2QuantileForecast
+# FPSeq2Q
