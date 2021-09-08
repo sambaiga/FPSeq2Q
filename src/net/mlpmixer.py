@@ -121,7 +121,8 @@ class GRUEncoder(nn.Module):
         else:
             self.hidden = self.hidden.to(input.device)
         
-
+        if self.hidden.size(1)!=input.size(0):
+            self.hidden = self.init_hidden_state(input).to(input.device)
         output, hidden = self.gru(input, self.hidden)
         output = self.activation(output)
         self.hidden = hidden.data

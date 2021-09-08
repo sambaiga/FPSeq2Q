@@ -217,7 +217,7 @@ def get_dataset(period  = '30T', rolling_window=3, SAMPLES_PER_DAY=48,
 
 
 class TimeSeriesDataset(object):   
-    def __init__(self, unknown_features, kown_features, targets,categorical_features=None, window_size=96, horizon=48, batch_size=64, shuffle=False):
+    def __init__(self, unknown_features, kown_features, targets,categorical_features=None, window_size=96, horizon=48, batch_size=64, shuffle=False, test=False, drop_last=True):
         self.inputs = unknown_features
         self.covariates = kown_features
         self.categorical = categorical_features
@@ -226,6 +226,8 @@ class TimeSeriesDataset(object):
         self.horizon = horizon
         self.batch_size = batch_size
         self.shuffle = shuffle
+        self.test = test
+        self.drop_last= drop_last
 
     def frame_series(self):
         
@@ -234,7 +236,9 @@ class TimeSeriesDataset(object):
         if self.categorical is not None:
             categorical, categorical_covariates = [], []
 
-        for i in range(0, nb_obs - self.window_size - self.horizon+1):
+        list_range = range(0, nb_obs - self.window_size - self.horizon+1, self.horizon) if self.test else range(0, nb_obs - self.window_size - self.horizon+1)
+
+        for i in list_range:
             features.append(torch.FloatTensor(self.inputs[i:i + self.window_size, :]).unsqueeze(0))
             targets.append(
                     torch.FloatTensor(self.targets[i + self.window_size:i + self.window_size + self.horizon]).unsqueeze(0))
@@ -270,7 +274,7 @@ class TimeSeriesDataset(object):
     
     def get_loader(self):
         dataset = self.frame_series()
-        loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=self.shuffle, drop_last=True, num_workers=4, pin_memory=True)
+        loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=self.shuffle, drop_last=self.drop_last, num_workers=4, pin_memory=True)
         return loader
         
 
@@ -352,6 +356,7 @@ class DatasetObjective(object):
         print('Compute load ghi feature')
         Load_ghi=[]
         for i in range(hparams['SAMPLES_PER_DAY'], len(self.data)-hparams['SAMPLES_PER_DAY'], hparams['SAMPLES_PER_DAY']):
+        #for i in range(hparams['SAMPLES_PER_DAY'], len(self.data)-hparams['SAMPLES_PER_DAY'], hparams['SAMPLES_PER_DAY']):
             lg=load[i-hparams['SAMPLES_PER_DAY']:i]- ghi[i:i+hparams['SAMPLES_PER_DAY']]
             Load_ghi.append(lg)
         Load_ghi = np.vstack(Load_ghi)
@@ -395,7 +400,7 @@ class DatasetObjective(object):
 
 
 
-    def get_dataset(self, hparams, window= slice('2020-03', '2020-06'), shufle=True):
+    def get_dataset(self, hparams, window= slice('2020-03', '2020-06'), shufle=True, test=False, drop_last=True):
         
         data = self.data.loc[window]
         numerical_features = hparams['time_varying_unknown_feature'] + hparams['time_varying_known_feature']
@@ -415,6 +420,6 @@ class DatasetObjective(object):
                             hparams['window_size'], 
                             hparams['horizon'], 
                             hparams['batch_size'], 
-                            shuffle=shufle).get_loader()
+                            shuffle=shufle, test=test, drop_last=drop_last).get_loader()
     
         return loader

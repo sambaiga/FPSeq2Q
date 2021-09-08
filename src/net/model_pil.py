@@ -9,7 +9,7 @@ import pytorch_lightning as pl
 
 class model_pil(pl.LightningModule):
     
-    def __init__(self, net, hparams, lr=1e-3, optimizer_name = "Adam", beta1=0.98, momentum=0.9):
+    def __init__(self, net, hparams, lr=2e-4, optimizer_name = "Adam", beta1=0.98, momentum=0.9):
         super().__init__()
         self.model = net
         self.save_hyperparameters()
@@ -108,10 +108,11 @@ class model_pil(pl.LightningModule):
         elif self.hparams.optimizer_name == "SGD":
            optim = torch.optim.SGD(self.parameters(), lr=self.hparams.lr, momentum=self.hparams.momentum)
 
-        fraction_optim = torch.optim.RMSprop(self.model.tau_proposal.parameters(), lr=self.hparams.lr*0.1, alpha=0.95, eps=0.00001)
+        #fraction_optim = torch.optim.RMSprop(self.model.tau_proposal.parameters(), lr=self.hparams.lr*0.1, alpha=0.95, eps=0.00001)
+        fraction_optim = torch.optim.Adam(self.model.tau_proposal.parameters(), lr=self.hparams.lr*0.1,  eps=1e-4)
 
         sched = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, 
-                                                           patience=25, factor=0.1,
+                                                           patience=50, factor=0.1,
                                                            verbose=True, mode="min")
        
         scheduler = {'scheduler':sched, 

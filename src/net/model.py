@@ -219,7 +219,7 @@ class FPQSeq2Q(nn.Module):
             
 
             
-            cwi=cwi_score(q, y, quantile_hats)
+            cwi=cwi_score(y, quantile_hats)
 
             mae = error.abs().mean()
 

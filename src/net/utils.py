@@ -25,3 +25,23 @@ class DictLogger(pl.loggers.TensorBoardLogger):
     def log_metrics(self, metrics, step=None):
         super().log_metrics(metrics, step=step)
         self.metrics.append(metrics)
+
+
+
+def get_predictions(net, features, true,  experiment):
+    with torch.no_grad():
+        z, h = net(features)
+        taus, tau_hats, entropies, attn_output = net.get_quantile_proposals(features, z, h)
+        quantile_hats = net.get_quantile_values(tau_hats,  h,z, attn_output)
+        pred = (quantile_hats*(taus[:, 1:, :] - taus[:, :-1,:])).sum(dim=1)
+            
+            
+    pred = experiment.target_transformer.inverse_transform(pred.numpy())
+    true = experiment.target_transformer.inverse_transform(true.numpy())
+    q_pred = quantile_hats.numpy()
+    N, M, T = q_pred.shape
+    q_pred = q_pred.reshape(N*M, T)
+    q_pred = experiment.target_transformer.inverse_transform(q_pred)
+    q_pred = q_pred.reshape(N, M, T)
+    
+    return true, pred, q_pred, tau_hats.numpy()

@@ -4,6 +4,7 @@ import matplotlib.ticker as ticker
 import matplotlib
 import matplotlib.dates as mdates
 from matplotlib.dates import DayLocator, HourLocator, DateFormatter, drange
+from statsmodels.graphics.api import qqplot#
 import math
 import palettable
 colors = [plt.cm.Blues(0.6), plt.cm.Reds(0.4), '#99ccff', '#ffcc99', plt.cm.Greys(0.6), plt.cm.Oranges(0.8), plt.cm.Greens(0.6), plt.cm.Purples(0.8)]
@@ -14,6 +15,30 @@ set_matplotlib_formats('retina')
 import arviz as az
 az.style.use(["science", "grid"])
 import pandas as pd
+
+nice_fonts = {
+        # Use LaTeX to write all text
+        "font.family": "serif",
+        # Always save as 'tight'
+        "savefig.bbox" : "tight",
+        "savefig.pad_inches" : 0.05,
+        "ytick.right" : True,
+        "font.serif" : "Times New Roman",
+        "mathtext.fontset" : "dejavuserif",
+        "axes.labelsize": 15,
+        "font.size": 15,
+        # Make the legend/label fonts a little smaller
+        "legend.fontsize": 12,
+        "xtick.labelsize": 12,
+        "ytick.labelsize": 12,
+        # Set line widths
+        "axes.linewidth" : 0.5,
+        "grid.linewidth" : 0.5,
+        "lines.linewidth" : 1.,
+        # Remove legend frame
+        "legend.frameon" : False
+}
+matplotlib.rcParams.update(nice_fonts)
 
 def set_figure_size(fig_width=None, fig_height=None, columns=2):
     assert(columns in [1,2])
@@ -203,13 +228,71 @@ def plot_boxplot_per_encoder(ax, dict_results, metric, label):
     
     encoders = list(dict_results.keys())
     for enc in encoders:
-        if enc=="SVR":
-            continue
         df[enc]=dict_results[enc][metric]
-    
     ax.boxplot(df, showmeans=True, manage_ticks=True, autorange=True)
     plt.xticks(range(1, len(encoders )+1), encoders , rotation=0, fontsize=12);
     ax.set_ylabel(label)
     ax.autoscale(tight=True)
+    
+    return ax
+
+
+
+def plot_prediction_with_pi(ax, true, mu, q_pred, date, true_max=None):
+  
+
+    h1 = ax.plot(date, true, ".", mec="#ff7f0e", mfc="None")
+    h2 = ax.plot(date, mu,   '--',  c="#1f77b4", alpha=0.8)
+    ax.set_ylabel('Power $(W)$')
+    N = q_pred.shape[0]
+    alpha = np.linspace(0.1, 0.9, N//2).tolist() + np.linspace(0.9, 0.2, 1+N//2).tolist()
+    
+    for i in range(N):
+        y1 = q_pred[i, :]
+        y2 = q_pred[-1-i, :]
+        h3 = ax.fill_between(date, y1.flatten(), y2.flatten(), color="lightsteelblue", alpha=alpha[1])
+
+    #ax.plot(date, q_pred[-1,:], 'k--')
+    #ax.plot(date, q_pred[0,:], 'k--')
+    ax.autoscale(tight=True)
+    if true_max is None:
+        true_max = true.max()+1000
+        
+    ax.set_ylim(true.min(), true_max)
+    
+    locator = mdates.HourLocator()
+    ax.xaxis.set_major_locator(locator)
+    
+    hfmt = mdates.DateFormatter('%m-%d %H')
+    ax.xaxis.set_major_formatter(hfmt)
+    
+    lines =[h1[0], h2[0], h3]
+    label = ["True", "Pred median", "$95\%$ Interval"]
+    ax.legend(lines, label, loc=0)
+    
+    return ax
+
+
+def plot_prediction(ax, true, mu, date, true_max=None):
+  
+
+    h1 = ax.plot(date, true, ".", mec="#ff7f0e", mfc="None")
+    h2 = ax.plot(date, mu,   '--',  c="#1f77b4", alpha=0.8)
+    ax.set_ylabel('Power $(W)$')
+    ax.autoscale(tight=True)
+    if true_max is None:
+        true_max = true.max()+1000
+        
+    ax.set_ylim(true.min(), true_max)
+
+    locator = mdates.HourLocator()
+    ax.xaxis.set_major_locator(locator)
+    
+    hfmt = mdates.DateFormatter('%m-%d %H')
+    ax.xaxis.set_major_formatter(hfmt)
+    
+    lines =[h1[0], h2[0]]
+    label = ["True", "Pred median"]
+    ax.legend(lines, label, loc=0)
     
     return ax

@@ -24,7 +24,7 @@ class Swish(nn.Module):
 def create_linear(in_channels, out_channels, bn=False):
     m = nn.Linear(in_channels,out_channels)
     #nn.init.xavier_normal_(m.weight.data)
-    nn.init.kaiming_uniform_(m.weight)
+    nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
         
     if m.bias is not None:
         torch.nn.init.constant_(m.bias, 0)
@@ -60,7 +60,7 @@ def create_conv1(in_channels, out_channels,
                   bias=bias, 
                   stride=stride, padding=padding)
 
-    nn.init.kaiming_uniform_(m.weight)
+    nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
     if m.bias is not None:
         torch.nn.init.constant_(m.bias, 0)
 
@@ -81,7 +81,7 @@ def create_deconv1(in_channels, out_channels,
                            bias=bias, 
                            stride=stride, padding=padding)
     
-    nn.init.kaiming_uniform_(m.weight)
+    nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
     if m.bias is not None:
         torch.nn.init.constant_(m.bias, 0)
 
