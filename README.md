@@ -3,7 +3,7 @@
 
 This repository is the official implementation of [ FPSeq2Q: Full Distributional  Net-Load Forecasting with Parameterized Quantile Regression.](). 
 
->📋  Optional: include a graphic explaining your approach/main result, bibtex entry, link to demos, blog posts and tutorials
+
 
 ## Requirements
 
@@ -42,4 +42,4 @@ Our model achieves the following performance on :
 | AR-NET    |   5.12 ± 0.79  |   0.11 ± 0.02    |     |      |      |
 | SSM       |     |       |     |      |      |
 | RNN-Gauss |     |       |     |      |      |
-| FPSeq2Q-MLP |     |       |     |      |      |
+| FPSeq2Q-MLP |   3.35 ± 0.16  |   0.07 ±  0.01    | 0.74 ± 0.02    |   2.23 ±  0.10   |  0.91  ±  0.01    |
