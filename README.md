@@ -37,9 +37,9 @@ Our model achieves the following performance on :
 
 | Model     | MAE | NRMSE | CWE | CRSP | PICP |
 |-----------|-----|-------|-----|------|------|
-| SVR       |     |       |     |      |      |
-| RF        |     |       |     |      |      |
-| AR-NET    |     |       |     |      |      |
+| SVR       |5.50 $\pm$ 0.86     |  0.12 $\pm$ 0.01     |     |      |      |
+| RF        | 5.03 $\pm$ 0.56    |     0.11 $\pm$ 0.01   |     |      |      |
+| AR-NET    |   5.12 $\pm$ 0.79  |   0.11 $\pm$ 0.02    |     |      |      |
 | SSM       |     |       |     |      |      |
 | RNN-Gauss |     |       |     |      |      |
 | FPSeq2Q-MLP |     |       |     |      |      |
