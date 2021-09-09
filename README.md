@@ -35,7 +35,11 @@ python experiment_objective.py
 Our model achieves the following performance on :
 
 
-
-
-
-
+| Model     | MAE | NRMSE | CWE | CRSP | PICP |
+|-----------|-----|-------|-----|------|------|
+| SVR       |     |       |     |      |      |
+| RF        |     |       |     |      |      |
+| AR-NET    |     |       |     |      |      |
+| SSM       |     |       |     |      |      |
+| RNN-Gauss |     |       |     |      |      |
+| FPSeq2Q-MLP |     |       |     |      |      |
