@@ -9,7 +9,29 @@ import math
 import palettable
 colors = [plt.cm.Blues(0.6), plt.cm.Reds(0.4), '#99ccff', '#ffcc99', plt.cm.Greys(0.6), plt.cm.Oranges(0.8), plt.cm.Greens(0.6), plt.cm.Purples(0.8)]
 SPINE_COLOR="gray"
-from net.metrics import *
+nice_fonts = {
+        # Use LaTeX to write all text
+        "font.family": "serif",
+        # Always save as 'tight'
+        "savefig.bbox" : "tight",
+        "savefig.pad_inches" : 0.05,
+        "ytick.right" : True,
+        "font.serif" : "Times New Roman",
+        "mathtext.fontset" : "dejavuserif",
+        "axes.labelsize": 15,
+        "font.size": 15,
+        # Make the legend/label fonts a little smaller
+        "legend.fontsize": 12,
+        "xtick.labelsize": 12,
+        "ytick.labelsize": 12,
+        # Set line widths
+        "axes.linewidth" : 0.5,
+        "grid.linewidth" : 0.5,
+        "lines.linewidth" : 1.,
+        # Remove legend frame
+        "legend.frameon" :True
+}
+matplotlib.rcParams.update(nice_fonts)
 from IPython.display import set_matplotlib_formats
 set_matplotlib_formats('retina')
 import arviz as az
@@ -176,49 +198,6 @@ def plot_intervals_ordered(ax, mu, std, true):
     _ = ax.set_ylabel("Predicted Values and Intervals")
     _ = ax.set_aspect("auto", "box")
     return ax
-
-
-        
-def plot_calibration(ax, mu, std, true):
-    (exp_proportions, obs_proportions) = get_proportion_lists_vectorized(mu, std, true)
-
-    curve_label="Predictor"
-    ax.plot([0, 1], [0, 1], "--", label="Ideal", c="#ff7f0e")
-    ax.plot(exp_proportions, obs_proportions, label=curve_label, c="#1f77b4")
-    ax.fill_between(exp_proportions, exp_proportions, obs_proportions, alpha=0.2)
-    ax.set_xlabel("Predicted proportion in interval")
-    ax.set_ylabel("Observed proportion in interval")
-    ax.axis("square")
-    buff = 0.01
-    ax.set_xlim([0 - buff, 1 + buff])
-    ax.set_ylim([0 - buff, 1 + buff])
-
-    # Compute miscalibration area
-    polygon_points = []
-    for point in zip(exp_proportions, obs_proportions):
-        polygon_points.append(point)
-    for point in zip(reversed(exp_proportions), reversed(exp_proportions)):
-        polygon_points.append(point)
-        polygon_points.append((exp_proportions[0], obs_proportions[0]))
-        polygon = Polygon(polygon_points)
-
-    x, y = polygon.exterior.xy  # original data
-    ls = LineString(np.c_[x, y])  # closed, non-simple
-    lr = LineString(ls.coords[:] + ls.coords[0:1])
-    mls = unary_union(lr)
-    polygon_area_list = [poly.area for poly in polygonize(mls)]
-    miscalibration_area = np.asarray(polygon_area_list).sum()
-
-    # Annotate plot with the miscalibration area
-    ax.text(
-            x=0.95,
-            y=0.05,
-            s="Miscalibration area = %.2f" % miscalibration_area,
-            verticalalignment="bottom",
-            horizontalalignment="right",
-            fontsize=12)
-    return ax
-
 
 
 

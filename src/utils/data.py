@@ -400,9 +400,12 @@ class DatasetObjective(object):
 
 
 
-    def get_dataset(self, hparams, window= slice('2020-03', '2020-06'), shufle=True, test=False, drop_last=True):
+    def get_dataset(self, hparams, window= None, data=None, shufle=True, test=False, drop_last=True):
         
-        data = self.data.loc[window]
+        if data is None and window is not None:
+            data = self.data.loc[window]
+
+
         numerical_features = hparams['time_varying_unknown_feature'] + hparams['time_varying_known_feature']
         if not self.hparams['seasonality']:
             known_features = data[hparams['time_varying_known_feature'] + hparams['time_varying_known_categorical_feature']].values.astype(np.float64)
